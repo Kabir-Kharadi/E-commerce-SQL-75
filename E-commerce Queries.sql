@@ -657,3 +657,51 @@ JOIN order_items oi
 ON o.order_id = oi.order_id
 JOIN UserOrderCounts uoc 
 ON o.user_id = uoc.user_id;
+
+
+-- MODULE 3 ------------------------------------------------------------------------------------------------------------------
+
+
+# Q31 - Customer Revenue Leaderboard
+      -- Calculate each customer's total spending and rank them from highest to lowest.
+      -- If two customers spend the same amount, they should receive the same rank.
+
+
+select o.user_id, sum(oi.quantity * oi.price) as total_spending, 
+	DENSE_RANK() over (order by sum(oi.quantity * oi.price) desc) as ranks
+from orders o
+join order_items oi
+using (order_id)
+group by 1;
+
+
+# Q32 - Top Order Per Customer
+      -- Return each customer's highest-value order.
+      -- If multiple orders have the same value, return the earliest one.
+
+select * 
+from (select o.user_id, o.order_id, sum(oi.quantity * oi.price), ROW_NUMBER() over(partition by o.user_id order by sum(oi.quantity * oi.price) desc, o.order_date asc) as rn
+from orders o
+join order_items oi
+using(order_id)
+group by 1,2) row_num
+where rn = 1;
+
+
+# Q33 - Customer Spending Progress
+	  -- For every order show:
+		-- order total
+		-- customer's cumulative spending
+		-- customer's average order value
+		-- difference between the current order and their average
+        
+with abc as (select o.user_id, o.order_id, sum(oi.quantity * oi.price) as order_total
+from orders o
+join order_items oi
+using (order_id)
+group by 1,2)
+
+select *, sum(order_total) over (partition by user_id order by order_id asc) as cum_spending,
+round(avg(order_total) over (partition by user_id), 2) as avg_order_value,
+round(order_total - AVG(order_total) OVER (PARTITION BY user_id), 2) AS diff
+from abc;
