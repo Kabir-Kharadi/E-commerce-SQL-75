@@ -993,8 +993,8 @@ total_spending,
 avg_order_value,
 max_order_value,
 latest_order_date,
-		-- customer spending rank
+-- customer spending rank
 dense_Rank() over (order by total_spending desc) as cust_spending_rnk,
-        -- percentage of company revenue
+-- percentage of company revenue
 (total_spending/sum(total_spending) over ()) * 100 as perc_comp_rev
 from custtotals;
