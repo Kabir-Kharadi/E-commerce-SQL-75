@@ -666,9 +666,8 @@ ON o.user_id = uoc.user_id;
       -- Calculate each customer's total spending and rank them from highest to lowest.
       -- If two customers spend the same amount, they should receive the same rank.
 
-
 select o.user_id, sum(oi.quantity * oi.price) as total_spending, 
-	DENSE_RANK() over (order by sum(oi.quantity * oi.price) desc) as ranks
+DENSE_RANK() over (order by sum(oi.quantity * oi.price) desc) as ranks
 from orders o
 join order_items oi
 using (order_id)
@@ -705,3 +704,297 @@ select *, sum(order_total) over (partition by user_id order by order_id asc) as 
 round(avg(order_total) over (partition by user_id), 2) as avg_order_value,
 round(order_total - AVG(order_total) OVER (PARTITION BY user_id), 2) AS diff
 from abc;
+
+# Q34 - 4. Monthly Top Customers
+	  -- For every month, list the three highest-spending customers
+      
+WITH MonthlySpend AS (
+    -- Calculate total spend per customer PER MONTH
+SELECT o.user_id, 
+DATE_FORMAT(o.order_date, '%m-%Y') AS order_month, 
+SUM(oi.quantity * oi.price) AS total_spent
+FROM orders o
+JOIN order_items oi 
+USING (order_id)
+GROUP BY 1,2
+),
+
+RankedSpend AS (
+    -- Rank the customers within each month bucket
+SELECT user_id, order_month, total_spent,
+DENSE_RANK() OVER (PARTITION BY order_month ORDER BY total_spent DESC) AS rnk
+FROM MonthlySpend
+)
+
+SELECT user_id, order_month, total_spent, rnk
+FROM RankedSpend
+WHERE rnk <= 3;
+
+
+# Q35 - Product Performance Within Category
+	  -- For each category display:
+		-- product revenue
+		-- category revenue
+		-- product's percentage contribution
+		-- product rank within its category
+        
+with cte as (
+select p.category, p.product_id, sum(oi.quantity * oi.price) as pro_rev
+from products p
+join order_items oi
+using (product_id)
+group by 1,2
+)
+
+select category, product_id, pro_rev,
+sum(pro_rev) over (PARTITION BY category) as cat_rev,
+concat(round((pro_rev / sum(pro_rev) over (partition by category)) * 100, 2), '%') as part_perc_contri,
+dense_rank() over (partition by category order by pro_rev desc) as part_rank
+from cte;
+
+# Q36 - order Contribution Analysis
+	  -- For every customer determine what percentage each individual order contributes to that customer's lifetime spending.
+
+with cte as (
+select o.user_id, oi.order_id, sum(oi.quantity * oi.price) as price_per_order
+from products p
+join order_items oi
+using (product_id)
+join orders o
+using (order_id)
+group by 1,2
+)
+
+select user_id, order_id, 
+(price_per_order / sum(price_per_order) over (partition by user_id) * 100) as perc_per_user 
+from cte
+group by 1,2;
+
+
+# Q37 - Store Revenue Timeline
+	  -- Display every order along with:
+		-- daily revenue
+		-- cumulative company revenue
+		-- revenue rank among all days
+        
+with cte as (
+select o.order_date, 
+sum(oi.quantity * oi.price) as rev_per_day
+from orders o
+join order_items oi
+using (order_id)
+GROUP BY 1
+order by 1 asc)
+
+select order_date, rev_per_day, sum(rev_per_day) over () as cum_rev, 
+dense_rank() over (order by rev_per_day desc)
+from cte;
+
+
+# Q38 - Customer Purchase Sequence
+	  -- Assign every customer's orders a purchase number (1st, 2nd, 3rd...) and determine whether each order falls in the customer's first half or second half of purchases.
+
+with cte as (
+select user_id, order_id, dense_rank() over (partition by user_id order by order_date asc) as no_of_orders
+from orders
+)
+
+select user_id, order_id, no_of_orders,
+case
+	when no_of_orders < avg(no_of_orders) over (partition by user_id) then '1st' else '2nd'
+end as z
+from cte;
+
+SELECT user_id, order_id, 
+ROW_NUMBER() OVER(PARTITION BY user_id ORDER BY order_date ASC) AS no_of_orders,
+NTILE(2) OVER (PARTITION BY user_id ORDER BY order_date ASC) AS purchase_half
+FROM orders;
+
+
+# Q39 - Top Products by Month
+	  -- For each month, rank products by revenue and return only the top five.
+
+WITH MonthlyProductRev AS (
+-- calculate the TOTAL revenue per product, per month
+
+SELECT DATE_FORMAT(o.order_date, '%m-%Y') AS order_month, oi.product_id, 
+SUM(oi.quantity * oi.price) AS total_revenue
+FROM orders o
+JOIN order_items oi 
+USING (order_id)
+GROUP BY 1, 2
+),
+
+RankedProducts AS (
+SELECT order_month, product_id, total_revenue, 
+DENSE_RANK() OVER (PARTITION BY order_month ORDER BY total_revenue DESC) AS ran
+    FROM MonthlyProductRev
+)
+
+SELECT * 
+FROM RankedProducts
+WHERE ran <= 5;
+
+
+# Q40 - Revenue Distribution
+	  -- Split customers into four equal groups based on total spending and compare:
+		-- average spending
+		-- average number of orders
+		-- average order value
+	  -- for each group.
+      
+WITH UserStats AS (
+SELECT o.user_id, SUM(oi.quantity * oi.price) AS lifetime_rev, COUNT(DISTINCT o.order_id) AS total_orders
+FROM orders o
+JOIN order_items oi 
+USING (order_id)
+GROUP BY o.user_id
+),
+
+Quartiles AS (
+SELECT user_id, lifetime_rev, total_orders,
+NTILE(4) OVER (ORDER BY lifetime_rev DESC) AS quartile
+FROM UserStats
+)
+-- Step 3: The Summary (Group by the Quartile)
+SELECT quartile,
+ROUND(AVG(lifetime_rev), 2) AS avg_spending,
+ROUND(AVG(total_orders), 2) AS avg_number_of_orders,
+ROUND(SUM(lifetime_rev) / SUM(total_orders), 2) AS avg_order_value
+FROM Quartiles
+GROUP BY 1
+ORDER BY 1 ASC;
+
+
+# Q41 - Most Valuable Category Per Customer
+	  -- Determine which product category generated the most revenue from each customer.
+      
+select * from (
+select o.user_id, p.category, sum(oi.quantity * oi.price) as rev,
+dense_rank() over (partition by user_id order by sum(oi.product_id * oi.price) desc) revrank
+from orders o
+join order_items oi
+using (order_id)
+join products p
+using (product_id)
+group by 1,2
+) f
+where revrank = 1;
+
+
+# Q42 - Order vs Customer Trend
+	  -- For every order display:
+		-- order value
+		-- customer's cumulative spending
+		-- customer's rank by lifetime spending
+		-- company's cumulative revenue
+	  -- All in one result.
+
+WITH OrderTotals AS (
+SELECT o.user_id, o.order_id, o.order_date,
+SUM(oi.quantity * oi.price) AS order_value
+FROM orders o
+JOIN order_items oi 
+USING (order_id)
+GROUP BY 1, 2, 3
+),
+
+CustomerLifetime AS (
+    -- Calculate the grand lifetime total for each user
+SELECT *, SUM(order_value) OVER (PARTITION BY user_id) AS lifetime_spend
+FROM OrderTotals
+)
+
+SELECT order_id, order_value,
+	-- Customer's Cumulative Spend (Running total over time)
+SUM(order_value) OVER (PARTITION BY user_id ORDER BY order_date ASC) AS cust_cum_spend,
+	--  Rank by Lifetime Spending
+DENSE_RANK() OVER (ORDER BY lifetime_spend DESC) AS cust_lifetime_rank,    
+    -- Company's Cumulative Revenue
+SUM(order_value) OVER (ORDER BY order_date ASC) AS company_cum_rev
+FROM CustomerLifetime
+ORDER BY order_date ASC;
+
+
+# Q43 - Customer Consistency
+	  -- Find customers whose every order is above the overall average order value.
+
+with total as (
+select o.user_id, oi.order_id, sum(oi.quantity * oi.price) as rev
+from order_items oi
+join orders o
+using (order_id)
+group by 1,2)
+
+select user_id from total
+group by 1
+having min(rev) > (select avg(rev) from total);
+
+
+# Q44 - Product Dominance
+	  -- Within each category, calculate:
+		-- revenue
+		-- quantity sold
+		-- revenue rank
+		-- quantity rank
+	 -- Then identify products that are ranked #1 in both.
+     
+with qr as (
+select p.category,p.product_id, 
+sum(oi.quantity) as quantity, 
+sum(oi.quantity * oi.price) as revenue
+from products p
+join order_items oi
+using (product_id)
+group by 1,2),
+
+qr2 as (
+select category, product_id, quantity, revenue,
+dense_rank() over (partition by category order by quantity desc) as qua_rnk,
+dense_rank() over (partition by category order by revenue desc) as rev_rnk
+from qr)
+
+select *
+from qr2
+where qua_rnk = 1 and rev_rnk = 1;
+
+
+# Q45 - Executive Sales Dashboard
+	  -- Create a single query that returns, for every customer:
+		-- total orders
+		-- total spending
+        -- average order value
+        -- highest-value order
+        -- customer spending rank
+        -- percentage of company revenue
+        -- latest order date
+        
+with ordertotals as (
+select o.user_id, o.order_id, o.order_date,
+sum(oi.quantity * oi.price) as order_value
+from orders o
+join order_items oi
+using (order_id)
+group by 1,2,3),
+
+custtotals as (
+select user_id,
+count(order_id) as total_orders,
+sum(order_value) as total_spending,
+avg(order_value) as avg_order_value,
+max(order_value) as max_order_value,
+max(order_date) as latest_order_date
+from ordertotals
+group by 1)
+
+select user_id, 
+total_orders, 
+total_spending,
+avg_order_value,
+max_order_value,
+latest_order_date,
+		-- customer spending rank
+dense_Rank() over (order by total_spending desc) as cust_spending_rnk,
+        -- percentage of company revenue
+(total_spending/sum(total_spending) over ()) * 100 as perc_comp_rev
+from custtotals;
